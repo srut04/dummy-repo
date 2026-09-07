@@ -1,0 +1,23 @@
+name: Hello World
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+    branches:
+      - dev
+
+jobs:
+  hello-world:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print hello world
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          if (( PR_NUMBER % 3 == 0 )); then
+            echo "PR #${PR_NUMBER} is a multiple of 3; failing."
+            exit 1
+          fi
+
+          echo "hello world"
