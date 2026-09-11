@@ -1,0 +1,58 @@
+name: Block PRs stacked on dev-branch
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  check-stack-base:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Walk PR stack and check root base branch
+        uses: actions/github-script@v7
+        env:
+          BLOCKED_BASE: dev-branch
+        with:
+          script: |
+            const blockedBase = process.env.BLOCKED_BASE;
+            const maxDepth = 25;
+            const visited = new Set();
+
+            let currentBase = context.payload.pull_request.base.ref;
+
+            for (let i = 0; i < maxDepth; i++) {
+              if (visited.has(currentBase)) {
+                core.setFailed(`Detected a cycle in the PR stack at branch "${currentBase}".`);
+                return;
+              }
+              visited.add(currentBase);
+
+              // Is currentBase itself the head branch of another open PR (i.e. part of a stack)?
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                head: `${context.repo.owner}:${currentBase}`,
+              });
+
+              if (prs.length === 0) {
+                // Reached the root of the stack.
+                break;
+              }
+
+              // Move one level up the stack.
+              currentBase = prs[0].base.ref;
+            }
+
+            core.info(`Root of stack targets "${currentBase}".`);
+
+            if (currentBase === blockedBase) {
+              core.setFailed(
+                `This PR (or the stack it belongs to) ultimately targets "${blockedBase}". ` +
+                `PRs targeting "${blockedBase}" are not allowed.`
+              );
+            }
