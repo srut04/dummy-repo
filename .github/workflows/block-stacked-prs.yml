@@ -1,0 +1,17 @@
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+    branches:
+      - main
+      - master
+      - dev*
+
+jobs:
+  validate-stacked-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block Stacked PRs
+        if: github.base_ref != 'dev'
+        run: |
+          echo "::error::Stacked PRs are disabled in this repository. Target branch must be 'dev'."
+          exit 1
