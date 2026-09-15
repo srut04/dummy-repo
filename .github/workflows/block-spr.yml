@@ -12,7 +12,7 @@ jobs:
   check-stack-base:
     runs-on: ubuntu-latest
     steps:
-      - name: Walk PR stack and check root base branch
+      - name: Walk PR stack and check for standalone status
         uses: actions/github-script@v7
         env:
           BLOCKED_BASE: dev
@@ -21,38 +21,65 @@ jobs:
             const blockedBase = process.env.BLOCKED_BASE;
             const maxDepth = 25;
             const visited = new Set();
-
-            let currentBase = context.payload.pull_request.base.ref;
-
+            
+            const currentBase = context.payload.pull_request.base.ref;
+            const currentHead = context.payload.pull_request.head.ref;
+            
+            // 1. Walk down the stack to find the ultimate root base
+            let rootBase = currentBase;
             for (let i = 0; i < maxDepth; i++) {
-              if (visited.has(currentBase)) {
-                core.setFailed(`Detected a cycle in the PR stack at branch "${currentBase}".`);
+              if (visited.has(rootBase)) {
+                core.setFailed(`Detected a cycle in the PR stack at branch "${rootBase}".`);
                 return;
               }
-              visited.add(currentBase);
-
-              // Is currentBase itself the head branch of another open PR (i.e. part of a stack)?
+              visited.add(rootBase);
+              
+              // Is rootBase itself the head branch of another open PR?
               const { data: prs } = await github.rest.pulls.list({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 state: "open",
-                head: `${context.repo.owner}:${currentBase}`,
+                head: `${context.repo.owner}:${rootBase}`,
               });
-
+              
               if (prs.length === 0) {
-                // Reached the root of the stack.
-                break;
+                break; // Reached the root of the stack
               }
-
-              // Move one level up the stack.
-              currentBase = prs[0].base.ref;
+              
+              // Move one level down the stack towards the root
+              rootBase = prs[0].base.ref;
             }
-
-            core.info(`Root of stack targets "${currentBase}".`);
-
-            if (currentBase === blockedBase) {
-              core.setFailed(
-                `This PR (or the stack it belongs to) ultimately targets "${blockedBase}". ` +
-                `PRs targeting "${blockedBase}" are not allowed.`
-              );
+            
+            core.info(`Root of stack targets "${rootBase}".`);
+            
+            // 2. If the ultimate target is dev, strictly enforce standalone PRs
+            if (rootBase === blockedBase) {
+              
+              // Condition A: This PR is a child in a stack (its immediate base isn't dev)
+              if (currentBase !== blockedBase) {
+                core.setFailed(
+                  `This PR is stacked on top of another PR and ultimately targets "${blockedBase}". ` +
+                  `Only standalone PRs are allowed to target "${blockedBase}".`
+                );
+                return;
+              }
+              
+              // Condition B: This PR targets dev, but is the bottom of a stack
+              const { data: stackedOnTop } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                base: currentHead, // Looking for PRs targeting this PR's head
+              });
+              
+              if (stackedOnTop.length > 0) {
+                core.setFailed(
+                  `This PR targets "${blockedBase}" but is the bottom of a stack ` +
+                  `(e.g., PR #${stackedOnTop[0].number} targets this PR's head branch). ` +
+                  `Stacked PRs are not allowed to target "${blockedBase}".`
+                );
+                return;
+              }
+              
+              core.info(`Standalone PR targeting "${blockedBase}" detected. Allowed.`);
             }
